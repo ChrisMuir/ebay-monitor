@@ -1,36 +1,39 @@
 package main
 
 import (
-	"github.com/PuerkitoBio/goquery"
-	"github.com/pkg/errors"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/pkg/errors"
 )
 
 type Format string
+
 const (
-	Auction		Format = "auction"
-	BuyItNow	Format = "buy-it-now"
+	Auction  Format = "auction"
+	BuyItNow Format = "buy-it-now"
 )
+
 type Listing struct {
-	Url					string	`json:"url"`
-	ImageUrl			string	`json:"imageUrl"`
-	EbayItemNumber		string	`json:"ebayItemNumber"`
+	Url            string `json:"url"`
+	ImageUrl       string `json:"imageUrl"`
+	EbayItemNumber string `json:"ebayItemNumber"`
 
-	SellerName					string	`json:"sellerName"`
-	SellerStars					int		`json:"sellerStars"`
-	SellerFeedbackPercentage	float32	`json:"sellerFeedbackPercentage"`
+	SellerName               string  `json:"sellerName"`
+	SellerStars              int     `json:"sellerStars"`
+	SellerFeedbackPercentage float32 `json:"sellerFeedbackPercentage"`
 
-	Format			Format	`json:"format"`
-	Location		string	`json:"location"`
-	Title			string	`json:"title"`
-	Condition		string	`json:"condition"`
-	Price			float32	`json:"price"`
-	Currency		string
-	Postage			int		`json:"postage"`
-	CanMakeOffer	bool	`json:"canMakeOffer"`
-	Returns			string	`json:"returns"`
+	Format       Format  `json:"format"`
+	Location     string  `json:"location"`
+	Title        string  `json:"title"`
+	Condition    string  `json:"condition"`
+	Price        float32 `json:"price"`
+	Currency     string
+	Postage      int    `json:"postage"`
+	CanMakeOffer bool   `json:"canMakeOffer"`
+	Returns      string `json:"returns"`
 }
 
 func GetPrice(price string) (float32, error) {
@@ -71,58 +74,38 @@ func GetListing(url string, currency string, doc *goquery.Document) (*Listing, e
 
 	listing.Url = url
 
-	imageUrl, exists := doc.Find("img#icImg").Attr("src")
+	// Get listing image
+	imageUrl, exists := doc.Find("div.ux-image-carousel-item").First().Find("img").Attr("src")
 	if !exists {
-		return nil, errors.New("src attribute does not exist on img#icImg")
+		return nil, errors.New("Could not find image element")
 	}
 	listing.ImageUrl = imageUrl
 
-	listing.EbayItemNumber = doc.Find("div#descItemNumber").Text()
+	// Get listing seller
+	listing.SellerName = doc.Find("div.x-sellercard-atf__info__about-seller").Find("a").Find("span.ux-textspans").Text()
 
-	listing.SellerName = doc.Find("span.mbg-nw").Text()
-
-	sellerStars, err := strconv.Atoi(doc.Find("span.mbg-l").Children().Eq(0).Text())
-	if err != nil {
-		return nil, errors.Wrap(err, "could convert seller stars text to int")
-	}
-	listing.SellerStars = sellerStars
-
-	sellerFeedbackPercentageText := strings.TrimSpace(doc.Find("div#si-fb").Text())
-	listing.SellerFeedbackPercentage = -1
-	if sellerFeedbackPercentageText != "" {
-		sellerFeedbackPercentage, err := strconv.ParseFloat(sellerFeedbackPercentageText[0:strings.Index(sellerFeedbackPercentageText, "%")], 32)
-		if err != nil {
-			return nil, errors.New("could not determine SellerFeedbackPercentage")
-		}
-		listing.SellerFeedbackPercentage = float32(sellerFeedbackPercentage)
-	}
-
-	price, err := GetPrice(doc.Find("span#prcIsum").Text())
+	// Get listing price
+	price, err := GetPrice(doc.Find("div.x-price-primary").Find("span.ux-textspans").Text())
 	if err != nil {
 		return nil, errors.Wrap(err, "could not determine price")
 	}
 	listing.Price = price
 
+	// Get listing format (BIN vs auction)
 	format := BuyItNow
-	if len(doc.Find("a#bidBtn_btn").Nodes) > 0 {
+	if doc.Find("li").Find("div.vim x-bid-action").Length() > 0 {
 		format = Auction
 	}
 	listing.Format = format
 
-	listing.Currency = currency
+	// Get listing title
+	listing.Title = doc.Find("h1.x-item-title__mainTitle").Find("span.ux-textspans").Text()
 
-	listing.Location = doc.Find("span[itemprop=availableAtOrFrom]").Text()
-
-	itemTitleSel := doc.Find("h1#itemTitle")
-	itemTitleSel.Find("span.g-hdn").Remove()
-	listing.Title = itemTitleSel.Text()
-
-	listing.Condition = doc.Find("div#vi-itm-cond").Text()
-
-	listing.CanMakeOffer = false
-	if len(doc.Find("a#boBtn_btn").Nodes) > 0 {
-		listing.CanMakeOffer = true
-	}
+	// TODO: re-implement this later
+	// listing.CanMakeOffer = false
+	// if len(doc.Find("a#boBtn_btn").Nodes) > 0 {
+	// 	listing.CanMakeOffer = true
+	// }
 
 	return listing, nil
 }
