@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/smtp"
@@ -84,28 +83,13 @@ func startWebServer(pullListings *[]*Listing) error {
 }
 
 func startScraping(searchItems []SearchItem, trackScrapedUrls bool, tpl *template.Template) error {
-	var scraped map[string]map[string]bool
-	var encoder *json.Encoder
-	var scrapedf *os.File
-	decoded := false
+	var err error
+	seen := make(map[string]map[string]bool)
 	if trackScrapedUrls {
-		// scraped.json will be for storing the already scraped URLs
-		scrapedf, err := os.OpenFile("scraped.json", os.O_RDWR|os.O_CREATE, os.ModePerm)
+		seen, err = readJsonAsMap("seen.json")
 		if err != nil {
-			return errors.Wrap(err, "could not open scraped.json")
+			fmt.Errorf("Error reading in seen json file, error: %v", err)
 		}
-		defer scrapedf.Close()
-
-		err = json.NewDecoder(scrapedf).Decode(&scraped)
-		decoded = err == nil
-		if err != nil {
-			fmt.Printf("Not using data in scraped.json: %v\n", err)
-		}
-
-		encoder = json.NewEncoder(scrapedf)
-	}
-	if !decoded {
-		scraped = map[string]map[string]bool{}
 	}
 
 	for {
@@ -114,8 +98,9 @@ func startScraping(searchItems []SearchItem, trackScrapedUrls bool, tpl *templat
 
 		for _, searchItem := range searchItems {
 			searchUrl := searchItem.Url
+			currentDT := time.Now().Format("2006-01-02T15:04:05 -07:00:00")
 
-			fmt.Println("Searching with", searchUrl)
+			fmt.Println(fmt.Sprintf("%v Searching with %v", currentDT, searchUrl))
 			doc, err := Get(searchUrl)
 			if err != nil {
 				fmt.Printf("Could not make request to SearchItem page: %v", err)
@@ -140,28 +125,15 @@ func startScraping(searchItems []SearchItem, trackScrapedUrls bool, tpl *templat
 				}
 
 				// Initialise map for this searchUrl if it doesn't already exist
-				if len(scraped[searchUrl]) == 0 {
-					scraped[searchUrl] = map[string]bool{}
+				if len(seen[searchUrl]) == 0 {
+					seen[searchUrl] = make(map[string]bool)
 				}
 
-				if scraped[searchUrl][url] {
+				if seen[searchUrl][url] {
 					if i == 0 {
 						fmt.Println("Found nothing new")
 					}
 					return true
-				}
-
-				// Set the value of this url to true to indicate that it has already been scraped
-				scraped[searchUrl][url] = true
-
-				if trackScrapedUrls {
-					// Update scraped.json with new contents
-					// Reset cursor so the file contents will be overwritten
-					scrapedf.Seek(0, io.SeekStart)
-					err = encoder.Encode(scraped)
-					if err != nil {
-						log.Fatalf("Could not encode to scraped.json: %s\n", err)
-					}
 				}
 
 				fmt.Println("\nVisiting new item page", url)
@@ -190,6 +162,17 @@ func startScraping(searchItems []SearchItem, trackScrapedUrls bool, tpl *templat
 				}
 
 				listings = append(listings, msg)
+
+				// Insert the url in the seen map
+				seen[searchUrl][url] = true
+
+				// Insert the url in the seen json file
+				if trackScrapedUrls {
+					err := updateJsonFile("seen.json", searchUrl, url)
+					if err != nil {
+						fmt.Errorf("Error saving new listings to local json file, error: %v", err)
+					}
+				}
 
 				// TODO: This block causes the loop to break after the first listing found (and inserted into the
 				// "scraped" map). Then the 2nd iteration of the loop, this block does not get hit, and the loop will
@@ -231,6 +214,44 @@ func sendEmail(email_body string) error {
 		to,
 		msg,
 	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func readJsonAsMap(fileName string) (map[string]map[string]bool, error) {
+	jsonFile, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	var data map[string]map[string]bool
+	err = json.Unmarshal(jsonFile, &data)
+	if err != nil {
+		data = make(map[string]map[string]bool)
+	}
+
+	return data, nil
+}
+
+func updateJsonFile(fileName string, key string, value string) error {
+	// Read in json file
+	fileMap, err := readJsonAsMap(fileName)
+
+	// Add new data to the map
+	if _, ok := fileMap[key]; !ok {
+		fileMap[key] = make(map[string]bool)
+	}
+	fileMap[key][value] = true
+
+	// Write the map back to json file
+	fileMapBytes, err := json.Marshal(fileMap)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(fileName, fileMapBytes, 0777)
 	if err != nil {
 		return err
 	}
